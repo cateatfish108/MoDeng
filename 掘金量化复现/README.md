@@ -4,11 +4,15 @@
 
 ## 文件清单
 
-| 文件 | 复现的策略 | 说明 |
-|------|-----------|------|
-| `modeng_grid_rsv_strategy.py` | **动态网格交易 + RSV 偏置** | 魔灯最核心的盯盘策略，完整可回测 |
+| 文件 | 复现的策略 | 类型 | 原始源码 |
+|------|-----------|------|---------|
+| `modeng_grid_rsv_strategy.py` | **动态网格交易 + RSV 偏置** | 择时交易 | `StdForReseau`、`cal_rsv_class`、`reseau_judge_class` |
+| `modeng_seaselect_strategy.py` | **每日海选选股**（6 规则引擎） | 选股 | `Function/SeaSelect/Sub/select_class.py` |
+| `modeng_m20_strategy.py` | **M20 均线穿越** | 择时交易 | `Function/M20/m20_class.py` |
+| `modeng_relative_strength_strategy.py` | **相对大盘强弱** | 选股/动量 | `SDK/RelativeChangeStrategySub.py` |
+| `modeng_lstm_predict.py` | **LSTM 次日指数预测** | 预测 | `Function/LSTM/.../TomorrowPredict.py` |
 
-> 海选选股、LSTM 预测如需复现可继续补充。
+> 魔灯全部策略均已复现。下文按文件逐一说明原始逻辑 → 掘金实现的映射。
 
 ## 一、动态网格 + RSV 偏置
 
@@ -51,7 +55,42 @@
 3. **触发频率**：魔灯实盘 30 秒轮询实时价，回测用日线 `on_bar`。若要更贴近原版可改订阅 `frequency='60s'` 并在 `on_tick`/分钟线判断。
 4. **防重复提示** `has_flashed_flag` 在自动交易里改为仓位约束（达到 0% / 100% 自然停止），保留了字段便于扩展。
 
-## 二、运行步骤
+## 二、每日海选选股（`modeng_seaselect_strategy.py`）
+
+把魔灯的规则引擎做成「定期选股 + 等权持有」的可回测策略：每月第一个交易日海选一次。
+
+| 魔灯规则 | 复现函数 | 逻辑 |
+|----------|---------|------|
+| MACD 反转 | `macd_stray_judge()` | 最近 3 根 MACD 中间值最小（V 型底），fast=6/slow=12/signal=9 |
+| SAR 反转 | `sar_stray_judge()` | SAR 由价上方跌到价下方返回 1（向上反转）|
+| RSI 区间 | `rsi_judge()` | RSI 落在 [low, high] |
+| 上市年龄 | `get_stock_age()` | 当前年 − 上市年 |
+| 当日涨跌幅 | `run_one_rule()` | `(close-昨close)/昨close` 落在区间 |
+| 价格分位 | `close_rank()` | 近 N 根 close 的 Min-Max 归一化分位 |
+
+规则在 `FILTER_RULES` 里按 `priority` 升序串行执行（与魔灯一致）。候选池默认用沪深300成分。
+
+## 三、M20 均线穿越（`modeng_m20_strategy.py`）
+
+复现 `m_pn / pn_pot` 穿越判断：价格上穿 M20 买入、下穿 M20 卖出。
+
+```
+m_N = MA(close, N);  pn = (close - m_N >= 0)
+上穿(pn 由 False→True) → 买；下穿(True→False) → 卖
+```
+
+## 四、相对大盘强弱（`modeng_relative_strength_strategy.py`）
+
+复现 `ratio_diff = 个股变化率 − 板块变化率`，按代码前缀归类板块（300→创业板/002→中小板/6→沪/0→深），
+累计近 N 日 `ratio_diff` 作为相对强弱得分，定期买入得分最高且为正（跑赢板块）的 TOP_N 只。
+
+## 五、LSTM 次日指数预测（`modeng_lstm_predict.py`）
+
+复现对上证/深证/创业板预测次日高/低/收。特征工程完全对齐魔灯（m9 乖离度 + 历史分位 + Min-Max 归一化，N_STEPS=20）。
+
+> ⚠️ 原版基于 TensorFlow 1.x 静态图，本复现改用 **TF2/Keras** `LSTM` 层，逻辑等价、可直接训练运行。数据源改用掘金 `history`。需 `pip install tensorflow scikit-learn`。
+
+## 六、运行步骤
 
 ```bash
 pip install gm
